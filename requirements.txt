@@ -1,4 +1,5 @@
 fastapi
 uvicorn
 google-cloud-texttospeech
-pydantic
+google-auth
+openai>=1.30.0
