@@ -8,6 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import texttospeech
 from google.oauth2 import service_account
 
+from openai import OpenAI
+
+# ================== OPENAI ==================
+
+if "OPENAI_API_KEY" not in os.environ:
+    raise RuntimeError("OPENAI_API_KEY is not set")
+
+openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 # ================== GOOGLE TTS ==================
 
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
@@ -30,12 +39,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================== SCHEMAS ==================
+# ================== SCHEMA ==================
 
 class AskRequest(BaseModel):
     question: str
 
+# ================== SYSTEM PROMPT ==================
+
+SYSTEM_PROMPT = """
+Ты — AI-консультант компании ARMGER GROUP (Казахстан).
+
+О компании:
+ARMGER GROUP — Казахстанская группа компаний.
+Направления:
+• Строительство и логистика
+• IT-решения и автоматизация
+• Производство медицинских расходных материалов (СИЗ)
+
+Философия:
+Практический бизнес, ответственность, прозрачность,
+поддержка внутреннего производства и экономики Казахстана.
+
+Правила ответа:
+- Отвечай кратко, уверенно, профессионально
+- Только по делу
+- Если вопрос не по компании — вежливо верни к услугам ARMGER GROUP
+- Язык: русский
+"""
+
 # ================== HELPERS ==================
+
+def generate_answer(question: str) -> str:
+    completion = openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": question}
+        ],
+        temperature=0.4,
+    )
+    return completion.choices[0].message.content.strip()
+
 
 def speak_text(text: str) -> str:
     synthesis_input = texttospeech.SynthesisInput(text=text)
@@ -68,15 +112,11 @@ def ask(data: AskRequest):
     if not data.question.strip():
         raise HTTPException(status_code=400, detail="Empty question")
 
-    # ===== ЛОГИКА ОТВЕТА (ПРОСТАЯ, НО ЧЕТКАЯ) =====
-    answer_text = (
-        "Я вас понял. Вы спросили: "
-        f"{data.question}. "
-        "Я голосовой AI ассистент ARMGER GROUP. "
-        "Могу отвечать на вопросы, консультировать и помогать."
-    )
-
-    audio_base64 = speak_text(answer_text)
+    try:
+        answer_text = generate_answer(data.question)
+        audio_base64 = speak_text(answer_text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "text": answer_text,
