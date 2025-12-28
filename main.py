@@ -4,6 +4,10 @@ import base64
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import UploadFile, File
+import openai
+import tempfile
+
 
 from google.cloud import texttospeech
 from google.oauth2 import service_account
