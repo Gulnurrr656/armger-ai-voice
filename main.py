@@ -1,16 +1,10 @@
 import os
-import json
 import base64
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import UploadFile, File
-import openai
 import tempfile
 
-
-from google.cloud import texttospeech
-from google.oauth2 import service_account
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from openai import OpenAI
 
@@ -20,16 +14,6 @@ if "OPENAI_API_KEY" not in os.environ:
     raise RuntimeError("OPENAI_API_KEY is not set")
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-# ================== GOOGLE TTS ==================
-
-if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
-    raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set")
-
-creds_info = json.loads(os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
-credentials = service_account.Credentials.from_service_account_info(creds_info)
-
-tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
 
 # ================== APP ==================
 
@@ -54,21 +38,21 @@ SYSTEM_PROMPT = """
 Ты — AI-консультант компании ARMGER GROUP (Казахстан).
 
 О компании:
-ARMGER GROUP — Казахстанская группа компаний.
+ARMGER GROUP — Казахстанская группа компаний.
 Направления:
 • Строительство и логистика
 • IT-решения и автоматизация
 • Производство медицинских расходных материалов (СИЗ)
 
 Философия:
-Практический бизнес, ответственность, прозрачность,
+Практический бизнес, ответственность, прозрачность,
 поддержка внутреннего производства и экономики Казахстана.
 
 Правила ответа:
-- Отвечай кратко, уверенно, профессионально
+- Отвечай кратко, уверенно, профессионально
 - Только по делу
 - Если вопрос не по компании — вежливо верни к услугам ARMGER GROUP
-- Язык: русский
+- Язык: русский
 """
 
 # ================== HELPERS ==================
@@ -86,24 +70,12 @@ def generate_answer(question: str) -> str:
 
 
 def speak_text(text: str) -> str:
-    synthesis_input = texttospeech.SynthesisInput(text=text)
-
-    voice = texttospeech.VoiceSelectionParams(
-        language_code="ru-RU",
-        name="ru-RU-Wavenet-B"
+    audio = openai_client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",  # современный, живой голос
+        input=text
     )
-
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3
-    )
-
-    response = tts_client.synthesize_speech(
-        input=synthesis_input,
-        voice=voice,
-        audio_config=audio_config
-    )
-
-    return base64.b64encode(response.audio_content).decode("utf-8")
+    return base64.b64encode(audio).decode("utf-8")
 
 # ================== ROUTES ==================
 
@@ -127,44 +99,33 @@ def ask(data: AskRequest):
         "audio": audio_base64
     }
 
+
 @app.post("/voice")
 async def voice(file: UploadFile = File(...)):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
+    try:
+        # сохраняем голос во временный файл
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
 
-    # Speech-to-Text
-    with open(tmp_path, "rb") as audio_file:
-        transcript = openai.audio.transcriptions.create(
-            model="gpt-4o-transcribe",
-            file=audio_file,
-            language="ru"
-        )
+        # Speech-to-Text
+        with open(tmp_path, "rb") as audio_file:
+            transcript = openai_client.audio.transcriptions.create(
+                file=audio_file,
+                model="gpt-4o-transcribe",
+                language="ru"
+            )
 
-    question = transcript.text
+        question = transcript.text
 
-    # GPT
-    chat = openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "Ты ассистент ARMGER GROUP. Отвечай чётко и по делу."},
-            {"role": "user", "content": question}
-        ]
-    )
+        # GPT + TTS
+        answer_text = generate_answer(question)
+        audio_base64 = speak_text(answer_text)
 
-    answer = chat.choices[0].message.content
+        return {
+            "text": answer_text,
+            "audio": audio_base64
+        }
 
-    # Text-to-Speech
-    tts = openai.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=answer
-    )
-
-    audio_base64 = base64.b64encode(tts).decode("utf-8")
-
-    return {
-        "text": answer,
-        "audio": audio_base64
-    }
-
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
