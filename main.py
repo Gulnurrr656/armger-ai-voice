@@ -126,3 +126,45 @@ def ask(data: AskRequest):
         "text": answer_text,
         "audio": audio_base64
     }
+
+@app.post("/voice")
+async def voice(file: UploadFile = File(...)):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
+    # Speech-to-Text
+    with open(tmp_path, "rb") as audio_file:
+        transcript = openai.audio.transcriptions.create(
+            model="gpt-4o-transcribe",
+            file=audio_file,
+            language="ru"
+        )
+
+    question = transcript.text
+
+    # GPT
+    chat = openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "Ты ассистент ARMGER GROUP. Отвечай чётко и по делу."},
+            {"role": "user", "content": question}
+        ]
+    )
+
+    answer = chat.choices[0].message.content
+
+    # Text-to-Speech
+    tts = openai.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",
+        input=answer
+    )
+
+    audio_base64 = base64.b64encode(tts).decode("utf-8")
+
+    return {
+        "text": answer,
+        "audio": audio_base64
+    }
+
