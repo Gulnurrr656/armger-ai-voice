@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,11 +28,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Schemas ----------
+# ---------- Schema ----------
 class SpeakRequest(BaseModel):
     text: str
-    language_code: str = "en-US"
-    voice_name: str = "en-US-Wavenet-D"
+    language_code: str = "ru-RU"
+    voice_name: str = "ru-RU-Wavenet-B"
 
 # ---------- Routes ----------
 @app.get("/")
@@ -63,11 +64,13 @@ def speak(data: SpeakRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    audio_base64 = base64.b64encode(response.audio_content).decode("utf-8")
+
     return {
-        "audio_base64": response.audio_content.decode("latin1")
+        "audio": audio_base64
     }
 
-# alias, чтобы не было 404
+# alias
 @app.post("/voice")
 def voice(data: SpeakRequest):
     return speak(data)
