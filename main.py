@@ -1,6 +1,7 @@
 import os
 import base64
 import tempfile
+import logging
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,12 +9,21 @@ from pydantic import BaseModel
 
 from openai import OpenAI
 
+# ================== LOGGING ==================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 # ================== OPENAI ==================
 
 if "OPENAI_API_KEY" not in os.environ:
     raise RuntimeError("OPENAI_API_KEY is not set")
 
 openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+logger.info("OpenAI client initialized")
 
 # ================== APP ==================
 
@@ -37,27 +47,14 @@ class AskRequest(BaseModel):
 SYSTEM_PROMPT = """
 Ты — AI-консультант компании ARMGER GROUP (Казахстан).
 
-О компании:
-ARMGER GROUP — Казахстанская группа компаний.
-Направления:
-• Строительство и логистика
-• IT-решения и автоматизация
-• Производство медицинских расходных материалов (СИЗ)
-
-Философия:
-Практический бизнес, ответственность, прозрачность,
-поддержка внутреннего производства и экономики Казахстана.
-
-Правила ответа:
-- Отвечай кратко, уверенно, профессионально
-- Только по делу
-- Если вопрос не по компании — вежливо верни к услугам ARMGER GROUP
-- Язык: русский
+Отвечай кратко, уверенно и профессионально.
 """
 
 # ================== HELPERS ==================
 
 def generate_answer(question: str) -> str:
+    logger.info(f"GPT question: {question}")
+
     completion = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -66,16 +63,26 @@ def generate_answer(question: str) -> str:
         ],
         temperature=0.4,
     )
-    return completion.choices[0].message.content.strip()
+
+    answer = completion.choices[0].message.content.strip()
+    logger.info(f"GPT answer length: {len(answer)}")
+
+    return answer
 
 
 def speak_text(text: str) -> str:
-    audio = openai_client.audio.speech.create(
+    logger.info("Starting TTS generation")
+
+    audio_response = openai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice="alloy",  # современный, живой голос
+        voice="alloy",
         input=text
     )
-    return base64.b64encode(audio).decode("utf-8")
+
+    audio_bytes = audio_response.read()
+    logger.info(f"TTS audio bytes size: {len(audio_bytes)}")
+
+    return base64.b64encode(audio_bytes).decode("utf-8")
 
 # ================== ROUTES ==================
 
@@ -85,30 +92,40 @@ def root():
 
 @app.post("/ask")
 def ask(data: AskRequest):
+    logger.info("POST /ask called")
+
     if not data.question.strip():
+        logger.warning("Empty question received")
         raise HTTPException(status_code=400, detail="Empty question")
 
     try:
         answer_text = generate_answer(data.question)
         audio_base64 = speak_text(answer_text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-    return {
-        "text": answer_text,
-        "audio": audio_base64
-    }
+        logger.info("POST /ask completed successfully")
+
+        return {
+            "text": answer_text,
+            "audio": audio_base64
+        }
+
+    except Exception as e:
+        logger.exception("Error in /ask")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/voice")
 async def voice(file: UploadFile = File(...)):
+    logger.info("POST /voice called")
+
     try:
-        # сохраняем голос во временный файл
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-            tmp.write(await file.read())
+            file_bytes = await file.read()
+            tmp.write(file_bytes)
             tmp_path = tmp.name
 
-        # Speech-to-Text
+        logger.info(f"Voice file saved, size: {len(file_bytes)} bytes")
+
         with open(tmp_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
                 file=audio_file,
@@ -117,10 +134,12 @@ async def voice(file: UploadFile = File(...)):
             )
 
         question = transcript.text
+        logger.info(f"Transcribed text: {question}")
 
-        # GPT + TTS
         answer_text = generate_answer(question)
         audio_base64 = speak_text(answer_text)
+
+        logger.info("POST /voice completed successfully")
 
         return {
             "text": answer_text,
@@ -128,4 +147,5 @@ async def voice(file: UploadFile = File(...)):
         }
 
     except Exception as e:
+        logger.exception("Error in /voice")
         raise HTTPException(status_code=500, detail=str(e))
