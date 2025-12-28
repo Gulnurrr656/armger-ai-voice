@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import texttospeech
 from google.oauth2 import service_account
 
-# ---------- Google Credentials ----------
+# ================== GOOGLE TTS ==================
+
 if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
     raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set")
 
@@ -17,7 +18,8 @@ credentials = service_account.Credentials.from_service_account_info(creds_info)
 
 tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
 
-# ---------- FastAPI ----------
+# ================== APP ==================
+
 app = FastAPI()
 
 app.add_middleware(
@@ -28,49 +30,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------- Schema ----------
-class SpeakRequest(BaseModel):
-    text: str
-    language_code: str = "ru-RU"
-    voice_name: str = "ru-RU-Wavenet-B"
+# ================== SCHEMAS ==================
 
-# ---------- Routes ----------
-@app.get("/")
-def root():
-    return {"status": "ok"}
+class AskRequest(BaseModel):
+    question: str
 
-@app.post("/speak")
-def speak(data: SpeakRequest):
-    if not data.text:
-        raise HTTPException(status_code=400, detail="Text is empty")
+# ================== HELPERS ==================
 
-    synthesis_input = texttospeech.SynthesisInput(text=data.text)
+def speak_text(text: str) -> str:
+    synthesis_input = texttospeech.SynthesisInput(text=text)
 
     voice = texttospeech.VoiceSelectionParams(
-        language_code=data.language_code,
-        name=data.voice_name
+        language_code="ru-RU",
+        name="ru-RU-Wavenet-B"
     )
 
     audio_config = texttospeech.AudioConfig(
         audio_encoding=texttospeech.AudioEncoding.MP3
     )
 
-    try:
-        response = tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    response = tts_client.synthesize_speech(
+        input=synthesis_input,
+        voice=voice,
+        audio_config=audio_config
+    )
 
-    audio_base64 = base64.b64encode(response.audio_content).decode("utf-8")
+    return base64.b64encode(response.audio_content).decode("utf-8")
+
+# ================== ROUTES ==================
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.post("/ask")
+def ask(data: AskRequest):
+    if not data.question.strip():
+        raise HTTPException(status_code=400, detail="Empty question")
+
+    # ===== ЛОГИКА ОТВЕТА (ПРОСТАЯ, НО ЧЕТКАЯ) =====
+    answer_text = (
+        "Я вас понял. Вы спросили: "
+        f"{data.question}. "
+        "Я голосовой AI ассистент ARMGER GROUP. "
+        "Могу отвечать на вопросы, консультировать и помогать."
+    )
+
+    audio_base64 = speak_text(answer_text)
 
     return {
+        "text": answer_text,
         "audio": audio_base64
     }
-
-# alias
-@app.post("/voice")
-def voice(data: SpeakRequest):
-    return speak(data)
