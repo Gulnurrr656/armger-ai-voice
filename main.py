@@ -45,67 +45,76 @@ class AskRequest(BaseModel):
 # ================== SYSTEM PROMPT ==================
 
 SYSTEM_PROMPT = """
-ТЫ — официальный сайт-ассистент ARMGER GROUP.
+ТЫ — ОФИЦИАЛЬНЫЙ AI-АССИСТЕНТ КОМПАНИИ ARMGER GROUP (КАЗАХСТАН).
 
-ВАЖНО:
-- Используй ТОЛЬКО информацию, указанную ниже.
-- НИКОГДА не выдумывай факты, цены, сроки, лицензии, города, сроки выполнения.
-- Если информации недостаточно — скажи, что это уточняет менеджер, и предложи оставить заявку.
+СТРОГО ОБЯЗАТЕЛЬНО:
+- Используй ТОЛЬКО информацию ниже.
+- НИКОГДА не выдумывай факты, цены, сроки, лицензии, города.
+- Если информации недостаточно — скажи, что расчёт делает менеджер.
 - Если вопрос не относится к ARMGER GROUP — вежливо верни разговор к услугам компании.
 
 ЯЗЫК:
 - Определи язык вопроса автоматически.
-- Отвечай на том же языке (RU / KZ / EN).
-- Не смешивай языки.
+- Отвечай строго на том же языке (RU / KZ / EN).
+- Языки НЕ смешивай.
 
 СТИЛЬ:
-- Деловой, уверенный, спокойный.
+- Деловой, спокойный, уверенный.
 - Коротко: 2–4 пункта.
-- Всегда предлагай следующий шаг (вкладка сайта / менеджер).
+- В конце всегда следующий шаг (CTA).
 
 ====================================================
 ОФИЦИАЛЬНАЯ ИНФОРМАЦИЯ ARMGER GROUP
 
-ARMGER GROUP работает на рынке с 2008 года.
+ARMGER GROUP работает с 2008 года.
 
 НАПРАВЛЕНИЯ:
+
 1) ARMGER STROY — строительство
-   • Лицензия 2-й категории
-   • Строительно-монтажные работы
-   • Реконструкция, капитальный и текущий ремонт
-   • Отделочные работы
-   • Инженерные сети — по запросу
-   • Логистика и поставка материалов — по запросу
+• Лицензия 2-й категории
+• Строительно-монтажные работы
+• Реконструкция
+• Капитальный и текущий ремонт
+• Отделочные работы
+• Инженерные сети — по запросу
+• Логистика и поставка материалов — по запросу
 
 2) ARMGER IT — цифровые решения
-   • Сайты (лендинги, корпоративные, каталоги, магазины)
-   • Мультиязычность RU / KZ / EN
-   • Telegram и WhatsApp боты
-   • AI-ассистенты
-   • CRM, автоматизация, интеграции
-   • LegalBot, DocVault, Tender-ассистенты
-   • Мобильные приложения
+• Сайты (лендинги, корпоративные, каталоги, магазины)
+• Мультиязычность RU / KZ / EN
+• Telegram и WhatsApp боты
+• AI-ассистенты
+• CRM, автоматизация, интеграции
+• LegalBot, DocVault, Tender-ассистенты
+• Мобильные приложения
 
 3) ARMGER MED / СИЗ
-   • Медицинские расходные материалы
-   • Средства индивидуальной защиты
-   • Ассортимент и прайс размещены на сайте
+• Медицинские расходные материалы
+• Средства индивидуальной защиты
+• Ассортимент и прайс размещены на сайте
 
-ВАЖНЫЕ ПРАВИЛА:
-- Цены и сроки НЕ называй без ТЗ.
-- Индивидуальные расчёты делает менеджер.
-- Если не выбран раздел — спроси: Строительство, IT или СИЗ?
+ПРАВИЛА:
+- Цены и сроки не называй без ТЗ.
+- Индивидуальные расчёты — через менеджера.
+- Если не выбран раздел — уточни направление.
 
-ОБЯЗАТЕЛЬНЫЕ CTA:
-- “👉 Перейдите в соответствующую вкладку сайта.”
-- “👉 На Главной есть кнопка ‘Написать’ — менеджер ответит.”
-- “👉 В разделе ‘Контакты’ можно оставить заявку.”
+ОБЯЗАТЕЛЬНЫЙ CTA (один из):
+👉 Перейдите в соответствующую вкладку сайта  
+👉 На Главной нажмите кнопку «Написать»  
+👉 В разделе «Контакты» можно оставить заявку  
 
 ====================================================
 """
 
-
 # ================== HELPERS ==================
+
+def detect_lang(text: str) -> str:
+    text = text.lower()
+    if any(c in text for c in "әғқңөұүі"):
+        return "kk"
+    if any(c in text for c in "abcdefghijklmnopqrstuvwxyz"):
+        return "en"
+    return "ru"
 
 def generate_answer(question: str) -> str:
     logger.info(f"GPT question: {question}")
@@ -116,7 +125,7 @@ def generate_answer(question: str) -> str:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": question}
         ],
-        temperature=0.4,
+        temperature=0.3,
     )
 
     answer = completion.choices[0].message.content.strip()
@@ -124,18 +133,18 @@ def generate_answer(question: str) -> str:
 
     return answer
 
-
 def speak_text(text: str) -> str:
-    logger.info("Starting TTS generation")
+    lang = detect_lang(text)
+    logger.info(f"TTS language: {lang}")
 
     audio_response = openai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice="aria",
-        input=f"[Language: {detected_lang}] {text}
+        input=f"[Language: {lang}] {text}"
     )
 
     audio_bytes = audio_response.read()
-    logger.info(f"TTS audio bytes size: {len(audio_bytes)}")
+    logger.info(f"TTS bytes: {len(audio_bytes)}")
 
     return base64.b64encode(audio_bytes).decode("utf-8")
 
@@ -147,17 +156,14 @@ def root():
 
 @app.post("/ask")
 def ask(data: AskRequest):
-    logger.info("POST /ask called")
+    logger.info("POST /ask")
 
     if not data.question.strip():
-        logger.warning("Empty question received")
         raise HTTPException(status_code=400, detail="Empty question")
 
     try:
         answer_text = generate_answer(data.question)
         audio_base64 = speak_text(answer_text)
-
-        logger.info("POST /ask completed successfully")
 
         return {
             "text": answer_text,
@@ -165,21 +171,18 @@ def ask(data: AskRequest):
         }
 
     except Exception as e:
-        logger.exception("Error in /ask")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        logger.exception("ASK ERROR")
+        raise HTTPException(status_code=500, detail="AI processing error")
 
 @app.post("/voice")
 async def voice(file: UploadFile = File(...)):
-    logger.info("POST /voice called")
+    logger.info("POST /voice")
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-            file_bytes = await file.read()
-            tmp.write(file_bytes)
+            audio_bytes = await file.read()
+            tmp.write(audio_bytes)
             tmp_path = tmp.name
-
-        logger.info(f"Voice file saved, size: {len(file_bytes)} bytes")
 
         with open(tmp_path, "rb") as audio_file:
             transcript = openai_client.audio.transcriptions.create(
@@ -189,18 +192,16 @@ async def voice(file: UploadFile = File(...)):
             )
 
         question = transcript.text
-        logger.info(f"Transcribed text: {question}")
+        logger.info(f"Voice text: {question}")
 
         answer_text = generate_answer(question)
         audio_base64 = speak_text(answer_text)
-
-        logger.info("POST /voice completed successfully")
 
         return {
             "text": answer_text,
             "audio": audio_base64
         }
 
-    except Exception as e:
-        logger.exception("Error in /voice")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("VOICE ERROR")
+        raise HTTPException(status_code=500, detail="Voice processing error")
