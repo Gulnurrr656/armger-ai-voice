@@ -130,7 +130,7 @@ def speak_text(text: str) -> str:
 
     audio_response = openai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice="alloy",
+        voice="aria",
         input=text
     )
 
