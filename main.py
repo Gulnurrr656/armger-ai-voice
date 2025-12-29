@@ -131,7 +131,7 @@ def speak_text(text: str) -> str:
     audio_response = openai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice="aria",
-        input=text
+        input=f"[Language: {detected_lang}] {text}
     )
 
     audio_bytes = audio_response.read()
