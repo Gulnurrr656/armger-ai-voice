@@ -1,8 +1,8 @@
 import os
+import re
 import base64
 import tempfile
 import logging
-import re
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 
 # ================== OPENAI ==================
 
-if "OPENAI_API_KEY" not in os.environ:
+if not os.getenv("OPENAI_API_KEY"):
     raise RuntimeError("OPENAI_API_KEY is not set")
 
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 logger.info("OpenAI client initialized")
 
 # ================== APP ==================
@@ -42,82 +42,114 @@ app.add_middleware(
 class AskRequest(BaseModel):
     question: str
 
-# ================== SYSTEM PROMPT ==================
-
-SYSTEM_PROMPT = """
-Ты — официальный AI-ассистент компании ARMGER GROUP (Казахстан).
-
-СТРОГО:
-- Используй ТОЛЬКО информацию ниже.
-- НИКОГДА не выдумывай факты, цены, сроки, лицензии.
-- Если информации нет — скажи, что уточнит менеджер.
-- Если вопрос не про ARMGER GROUP — верни разговор к услугам компании.
-
-ЯЗЫК:
-- Определи язык вопроса.
-- Отвечай на том же языке (RU / KZ / EN).
-- Языки не смешивай.
-
-СТИЛЬ:
-- Деловой
-- Коротко (2–4 пункта)
-- В конце CTA (вкладка сайта / менеджер)
-"""
-
-# ================== HELPERS ==================
+# ================== LANGUAGE ==================
 
 def detect_lang(text: str) -> str:
-    text = text.lower()
-
-    # Казахский
-    if re.search(r"[әғқңөұүі]", text):
+    t = text.lower()
+    if re.search(r"[әғқңөұүі]", t):
         return "kk"
-
-    # Русский — кириллица
-    if re.search(r"[а-яё]", text):
-        return "ru"
-
-    # Английский
-    return "en"
-
+    if re.search(r"[a-z]", t):
+        return "en"
+    return "ru"
 
 def select_voice(lang: str) -> str:
-    # Лучшее качество
     if lang in ("ru", "kk"):
         return "nova"
     return "verse"
 
+# ================== PROMPTS ==================
 
-def generate_answer(question: str) -> str:
-    logger.info(f"GPT question: {question}")
+SYSTEM_PROMPTS = {
+    "ru": """ТЫ — ARMGER GROUP Assistant (сайт-ассистент ARMGER GROUP).
 
-    completion = openai_client.chat.completions.create(
+Ты встроен прямо в официальный сайт ARMGER GROUP.
+НЕ говори «перейдите на сайт». Используй формулировки:
+«на этой странице», «в соответствующем разделе», «в меню сайта».
+
+Ты консультируешь по направлениям:
+ARMGER STROY, ARMGER IT, ARMGER MED / СИЗ.
+
+Используй ТОЛЬКО информацию ниже.
+НИКОГДА не выдумывай цены, сроки, лицензии.
+Если данных недостаточно — скажи, что менеджер уточнит.
+
+Отвечай ТОЛЬКО на русском языке.
+Коротко, делово, 2–4 пункта + следующий шаг.
+
+=== ДАЛЕЕ ПОЛНЫЙ ПРОМПТ ИЗ ФАЙЛА (RU) ===
+""",
+
+    "en": """You are the ARMGER GROUP website assistant.
+
+You are embedded directly on the official ARMGER GROUP website.
+Do NOT say “visit the website”. Use:
+“on this page”, “in the relevant section”, “in the site menu”.
+
+Use ONLY the information provided below.
+Do NOT invent prices, timelines, licenses.
+If data is missing — say the manager will clarify.
+
+Answer STRICTLY in English.
+Business tone, 2–4 bullet points + next step.
+
+=== FULL EN PROMPT CONTENT BELOW ===
+""",
+
+    "kk": """СЕН — ARMGER GROUP сайтының ассистентісің.
+
+Сен сайттың ІШІНДЕ жұмыс істейсің.
+«Сайтқа өтіңіз» деп айтпа.
+«Осы бетте», «тиісті бөлімде», «сайт мәзірінде» деп айт.
+
+Тек төмендегі ақпаратты қолдан.
+Баға, мерзім, лицензия ойдан қоспа.
+Қажет болса — менеджер нақтылайды де.
+
+ЖАУАПТЫ ТЕК ҚАЗАҚ ТІЛІНДЕ бер.
+Қысқа, іскер стиль, 2–4 тармақ + келесі қадам.
+
+=== ТОЛЫҚ ҚАЗАҚША ПРОМПТ ТӨМЕНДЕ ===
+"""
+}
+
+# ВАЖНО: сюда ты можешь просто вставить
+# ПОЛНЫЙ ТЕКСТ ИЗ DOCX без изменений
+# (я оставил маркеры, логика уже готова)
+
+# ================== HELPERS ==================
+
+def generate_answer(question: str) -> tuple[str, str]:
+    lang = detect_lang(question)
+    system_prompt = SYSTEM_PROMPTS[lang]
+
+    logger.info(f"Language detected: {lang}")
+    logger.info(f"User question: {question}")
+
+    completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": question}
         ],
         temperature=0.3,
     )
 
     answer = completion.choices[0].message.content.strip()
-    logger.info(f"GPT answer length: {len(answer)}")
-    return answer
+    logger.info(f"Answer length: {len(answer)}")
 
+    return answer, lang
 
-def speak_text(text: str) -> str:
-    lang = detect_lang(text)
+def speak_text(text: str, lang: str) -> str:
     voice = select_voice(lang)
+    logger.info(f"TTS voice: {voice} | lang: {lang}")
 
-    logger.info(f"TTS lang={lang}, voice={voice}")
-
-    audio_response = openai_client.audio.speech.create(
+    response = client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice=voice,
         input=text
     )
 
-    audio_bytes = audio_response.read()
+    audio_bytes = response.read()
     return base64.b64encode(audio_bytes).decode("utf-8")
 
 # ================== ROUTES ==================
@@ -128,53 +160,37 @@ def root():
 
 @app.post("/ask")
 def ask(data: AskRequest):
-    logger.info("POST /ask")
-
     if not data.question.strip():
         raise HTTPException(status_code=400, detail="Empty question")
 
     try:
-        answer_text = generate_answer(data.question)
-        audio_base64 = speak_text(answer_text)
-
-        return {
-            "text": answer_text,
-            "audio": audio_base64
-        }
-
-    except Exception:
+        answer, lang = generate_answer(data.question)
+        audio = speak_text(answer, lang)
+        return {"text": answer, "audio": audio}
+    except Exception as e:
         logger.exception("ASK ERROR")
-        raise HTTPException(status_code=500, detail="AI processing error")
-
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/voice")
 async def voice(file: UploadFile = File(...)):
-    logger.info("POST /voice")
-
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
-            audio_bytes = await file.read()
-            tmp.write(audio_bytes)
+            content = await file.read()
+            tmp.write(content)
             tmp_path = tmp.name
 
-        with open(tmp_path, "rb") as audio_file:
-            transcript = openai_client.audio.transcriptions.create(
-                file=audio_file,
+        with open(tmp_path, "rb") as f:
+            transcript = client.audio.transcriptions.create(
                 model="gpt-4o-transcribe",
-                language="ru"
+                file=f
             )
 
         question = transcript.text
-        logger.info(f"Voice text: {question}")
+        answer, lang = generate_answer(question)
+        audio = speak_text(answer, lang)
 
-        answer_text = generate_answer(question)
-        audio_base64 = speak_text(answer_text)
+        return {"text": answer, "audio": audio}
 
-        return {
-            "text": answer_text,
-            "audio": audio_base64
-        }
-
-    except Exception:
+    except Exception as e:
         logger.exception("VOICE ERROR")
-        raise HTTPException(status_code=500, detail="Voice processing error")
+        raise HTTPException(status_code=500, detail=str(e))
